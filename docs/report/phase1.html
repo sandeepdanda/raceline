@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Raceline - Report: a car that taught itself to lap a track</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --ink:#e6edf3; --muted:#8b949e; --car:#2f81f7; --grid:#21262d; --good:#3fb950; --bad:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; }
+  main { max-width:880px; margin:0 auto; padding:36px 24px 64px; }
+  h1 { font-size:28px; letter-spacing:-0.5px; margin:0 0 6px; }
+  h2 { font-size:20px; margin:34px 0 10px; border-bottom:1px solid var(--grid); padding-bottom:6px; }
+  .sub { color:var(--muted); margin:0 0 8px; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; font-variant-numeric:tabular-nums; }
+  th,td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--grid); }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  .win { color:var(--good); font-weight:600; } .bad { color:var(--bad); }
+  .car { color:var(--car); font-weight:600; }
+  code { background:#21262d; padding:1px 6px; border-radius:4px; font-size:13px; }
+  .callout { background:var(--panel); border:1px solid var(--grid); border-left:3px solid var(--good); border-radius:8px; padding:14px 18px; margin:18px 0; }
+  img { max-width:100%; border:1px solid var(--grid); border-radius:8px; margin:10px 0; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .metric { background:var(--panel); border:1px solid var(--grid); border-radius:8px; padding:14px; }
+  .metric .big { font-size:26px; font-weight:700; }
+  .metric .lbl { color:var(--muted); font-size:13px; }
+  footer { color:var(--muted); font-size:13px; margin-top:40px; border-top:1px solid var(--grid); padding-top:14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Raceline - Report</h1>
+  <p class="sub">A car that taught itself to lap a track from nothing but distance sensors, vs the untrained brain it started with and a hand-coded heuristic. Generated 2026-06-29 from <code>runs/ppo/eval.json</code> + the live in-browser demo.</p>
+
+  <div class="callout">
+    <strong>Headline result.</strong> After ~4 minutes of training on a laptop CPU, the PPO
+    policy completes a <strong>clean lap on 100% of 30 held-out seeds with zero crashes</strong>.
+    The untrained brain and a hand-coded heuristic crash inside the first corner every time.
+  </div>
+
+  <h2>The result (30 seeds, IQM with 95% bootstrap CI)</h2>
+  <p class="sub">IQM = interquartile mean (robust per Agarwal et al. <em>rliable</em>). Each driver ran on 30 fresh seeds disjoint from training.</p>
+  <table>
+    <tr><th>Driver</th><th>Laps completed</th><th>Crash rate</th><th>Lap progress</th><th>Lap time (steps)</th></tr>
+    <tr><td class="car">Raceline (PPO)</td><td class="win">1.00 [1.00, 1.00]</td><td class="win">0.00 [0.00, 0.00]</td><td class="win">1.00</td><td class="win">127 [126, 128]</td></tr>
+    <tr><td>Longest-ray heuristic</td><td class="bad">0.00</td><td class="bad">1.00</td><td>0.06</td><td>800 (never)</td></tr>
+    <tr><td>Random</td><td class="bad">0.00</td><td class="bad">1.00</td><td>0.04</td><td>800 (never)</td></tr>
+  </table>
+
+  <div class="grid2">
+    <div class="metric"><div class="big win">100%</div><div class="lbl">of seeds completed a full lap</div></div>
+    <div class="metric"><div class="big win">0</div><div class="lbl">crashes across all 30 seeds</div></div>
+    <div class="metric"><div class="big">CIs separate</div><div class="lbl">RL laps CI [1.00,1.00] vs heuristic [0.00,0.00]</div></div>
+    <div class="metric"><div class="big">~4 min</div><div class="lbl">training time on a laptop CPU</div></div>
+  </div>
+
+  <h2>The demo: untrained vs trained, same track</h2>
+  <p class="sub">The trained PPO policy exported to a 22 KB ONNX graph, running client-side via
+  onnxruntime-web - no backend. Toggling the brain on the same track:</p>
+  <table>
+    <tr><th>Brain</th><th>Outcome</th><th>Steps survived</th></tr>
+    <tr><td class="car">Trained (PPO)</td><td class="win">clean lap</td><td>125</td></tr>
+    <tr><td>Untrained (episode 0, random)</td><td class="bad">crashed</td><td>26</td></tr>
+  </table>
+  <p class="sub">The green lines are the car's distance sensors - the only thing it can see. It learned which sensor patterns mean "turn now" purely by crashing and being rewarded for progress.</p>
+  <img src="img/demo.png" alt="Raceline in-browser demo: car driving the track with sensor rays" />
+
+  <h2>How this was produced (reproducible)</h2>
+  <table>
+    <tr><th>Step</th><th>Command</th></tr>
+    <tr><td>Env self-test</td><td><code>python -m raceline.envs.racetrack_env --selftest</code></td></tr>
+    <tr><td>Train PPO (600k steps, ~4 min CPU)</td><td><code>python -m raceline.train --config configs/ppo.yaml</code></td></tr>
+    <tr><td>Evaluate (30 seeds + CIs)</td><td><code>python -m raceline.eval --checkpoint runs/ppo/best_model.zip</code></td></tr>
+    <tr><td>Export to ONNX (22 KB)</td><td><code>python -m raceline.export_onnx --checkpoint runs/ppo/best_model.zip --out web/policy.onnx</code></td></tr>
+    <tr><td>Tests</td><td><code>pytest tests/ -q</code> &rarr; 12 passed</td></tr>
+  </table>
+
+  <h2>Honest caveats</h2>
+  <ul>
+    <li>One track (a rounded oval). It is not yet shown to generalize to a track it never trained on - that's the Phase 5 generalization test.</li>
+    <li>The car physics is a simplified kinematic model (no tyre slip, instant steering response within the per-step limit). Good enough to make cornering a real skill, not a faithful vehicle sim.</li>
+    <li>"Lap time" is steps-to-first-lap; drivers that never finish are charged the full 800-step budget, which is a floor not a true time.</li>
+    <li>Reward weighting was not swept. The progress-vs-time-vs-crash balance is one reasonable point, not a tuned frontier.</li>
+  </ul>
+
+  <footer>
+    Raceline - reinforcement learning that learns to drive. A personal project: Gymnasium
+    custom env + Stable-Baselines3 PPO + ONNX in the browser. Design rationale in
+    <code>PROJECT.md</code>; RL stack research in <code>research/</code>.
+  </footer>
+</main>
+</body>
+</html>

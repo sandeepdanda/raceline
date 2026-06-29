@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# RL training artifacts
+runs/ppo/tb/
+runs/ppo/*.zip
+runs/ppo/evaluations.npz
+
+# keep the exported policy the web demo needs + the headline eval result
+!web/policy.onnx
+!runs/ppo/eval.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor / test cache
+.DS_Store
+.vscode/
+.idea/
+.pytest_cache/
+.hypothesis/
+web/.playwright-mcp/

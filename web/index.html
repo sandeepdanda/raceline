@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Raceline - watch a car teach itself to race</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --ink:#e6edf3; --muted:#8b949e; --car:#2f81f7; --ray:#3fb95066; --wall:#6e7681; --good:#3fb950; --bad:#f85149; --accent:#2f81f7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; }
+  header { padding:28px 24px 8px; max-width:1000px; margin:0 auto; }
+  h1 { margin:0 0 4px; font-size:26px; letter-spacing:-0.5px; }
+  .tag { color:var(--muted); margin:0 0 6px; }
+  main { max-width:1000px; margin:0 auto; padding:12px 24px 48px; }
+  .controls { background:var(--panel); border:1px solid #21262d; border-radius:10px; padding:16px 18px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  button { border:0; border-radius:8px; padding:10px 18px; font-size:14px; cursor:pointer; font-weight:600; }
+  #run { background:var(--accent); color:#fff; }
+  .toggle { display:inline-flex; border:1px solid #30363d; border-radius:8px; overflow:hidden; }
+  .toggle button { background:transparent; color:var(--muted); border-radius:0; font-weight:500; }
+  .toggle button.on { background:var(--accent); color:#fff; }
+  button:disabled { opacity:0.5; cursor:default; }
+  #status { color:var(--muted); font-size:13px; }
+  .stage { margin-top:16px; background:var(--panel); border:1px solid #21262d; border-radius:10px; padding:10px; }
+  canvas { width:100%; height:480px; display:block; background:#0b0f14; border-radius:6px; }
+  .scoreboard { display:flex; gap:26px; margin-top:14px; flex-wrap:wrap; font-variant-numeric:tabular-nums; }
+  .stat { background:var(--panel); border:1px solid #21262d; border-radius:8px; padding:12px 16px; min-width:120px; }
+  .stat .v { font-size:24px; font-weight:700; }
+  .stat .l { color:var(--muted); font-size:12px; }
+  .note { color:var(--muted); font-size:13px; margin-top:18px; }
+  code { background:#21262d; padding:1px 5px; border-radius:4px; font-size:13px; }
+  .win { color:var(--good); } .bad { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Raceline</h1>
+  <p class="tag">Watch a car teach itself to race. The "trained" brain below is a real PPO policy that learned to lap this track from nothing but distance sensors - exported to ONNX, running entirely in your browser, no backend. Flip it to "untrained" to see where it started.</p>
+</header>
+<main>
+  <div class="controls">
+    <div class="toggle" id="brainToggle">
+      <button data-brain="trained" class="on">Trained brain</button>
+      <button data-brain="untrained">Untrained (episode 0)</button>
+    </div>
+    <button id="run">Drive</button>
+    <span id="status"></span>
+  </div>
+
+  <div class="stage"><canvas id="track"></canvas></div>
+
+  <div class="scoreboard">
+    <div class="stat"><div class="v" id="lap">0%</div><div class="l">lap progress</div></div>
+    <div class="stat"><div class="v" id="speed">0</div><div class="l">speed</div></div>
+    <div class="stat"><div class="v" id="result">-</div><div class="l">outcome</div></div>
+    <div class="stat"><div class="v" id="steps">0</div><div class="l">steps</div></div>
+  </div>
+
+  <p class="note">The green lines are the car's <strong>distance sensors</strong> - that's all it can see. It was never told where the track is; it learned which sensor patterns mean "turn now" by crashing thousands of times and getting a small reward for progress. Across 30 fresh tracks-seeds it had never trained on, the trained policy completes a clean lap <strong>100% of the time with zero crashes</strong>; the untrained brain and a hand-coded heuristic crash within the first corner (see <code>runs/ppo/eval.json</code>).</p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+<script type="module">
+import { Car, Track, ovalTrack, OnnxController, RandomController, CFG } from "./sim.js";
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("track");
+const ctx = canvas.getContext("2d");
+let session = null, brain = "trained", running = false;
+const track = ovalTrack();
+
+// world->screen transform (fit the track into the canvas with padding)
+function fit() {
+  const xs = track.outer.concat(track.inner);
+  const minX = Math.min(...xs.map(p => p[0])), maxX = Math.max(...xs.map(p => p[0]));
+  const minY = Math.min(...xs.map(p => p[1])), maxY = Math.max(...xs.map(p => p[1]));
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+  const pad = 30;
+  const sx = (w - 2*pad) / (maxX - minX), sy = (h - 2*pad) / (maxY - minY);
+  const s = Math.min(sx, sy);
+  return { s, ox: pad - minX*s + (w-2*pad - (maxX-minX)*s)/2, oy: pad - minY*s + (h-2*pad - (maxY-minY)*s)/2, w, h };
+}
+let T = fit();
+const X = (x) => T.ox + x*T.s, Y = (y) => T.oy + y*T.s;
+
+function drawTrackBase() {
+  ctx.clearRect(0,0,T.w,T.h);
+  // track surface (fill between walls)
+  ctx.fillStyle = "#161b22";
+  ctx.beginPath();
+  track.outer.forEach((p,i)=> i?ctx.lineTo(X(p[0]),Y(p[1])):ctx.moveTo(X(p[0]),Y(p[1])));
+  ctx.closePath();
+  track.inner.slice().reverse().forEach((p)=>ctx.lineTo(X(p[0]),Y(p[1])));
+  ctx.closePath();
+  ctx.fill("evenodd");
+  // walls
+  for (const poly of [track.outer, track.inner]) {
+    ctx.strokeStyle = "#6e7681"; ctx.lineWidth = 2; ctx.beginPath();
+    poly.forEach((p,i)=> i?ctx.lineTo(X(p[0]),Y(p[1])):ctx.moveTo(X(p[0]),Y(p[1])));
+    ctx.closePath(); ctx.stroke();
+  }
+  // start line
+  const c0 = track.center[0]; ctx.strokeStyle="#e6edf3"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(X(track.inner[0][0]),Y(track.inner[0][1])); ctx.lineTo(X(track.outer[0][0]),Y(track.outer[0][1])); ctx.stroke();
+}
+
+function drawCar(car) {
+  // sensor rays
+  for (let k=0;k<car.rayAngles.length;k++){
+    const ang = car.heading + car.rayAngles[k];
+    const d = car.lastRays[k];
+    ctx.strokeStyle = "#3fb95088"; ctx.lineWidth=1; ctx.beginPath();
+    ctx.moveTo(X(car.pos[0]),Y(car.pos[1]));
+    ctx.lineTo(X(car.pos[0]+Math.cos(ang)*d), Y(car.pos[1]+Math.sin(ang)*d));
+    ctx.stroke();
+  }
+  // car body: a triangle pointing along the heading
+  ctx.save();
+  ctx.translate(X(car.pos[0]), Y(car.pos[1]));
+  ctx.rotate(car.heading);
+  ctx.fillStyle = car.crashed ? "#f85149" : "#2f81f7";
+  ctx.beginPath();
+  ctx.moveTo(11, 0); ctx.lineTo(-7, 6); ctx.lineTo(-7, -6); ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+async function loadPolicy() {
+  $("status").textContent = "loading policy...";
+  try {
+    ort.env.wasm.numThreads = 1;
+    session = await ort.InferenceSession.create("./policy.onnx", { executionProviders:["wasm"] });
+    $("status").textContent = "ready - press Drive";
+  } catch(e) {
+    $("status").textContent = "could not load policy.onnx (run export_onnx.py)";
+    $("run").disabled = true;
+  }
+}
+
+async function drive() {
+  if (running) return;
+  running = true; $("run").disabled = true;
+  T = fit();
+  const car = new Car(track);
+  const ctrl = brain === "trained" ? new OnnxController(session) : new RandomController(7);
+  $("result").textContent = "-"; $("result").className = "v";
+
+  let done = false;
+  while (!done) {
+    const a = await ctrl.act(car);
+    const r = car.step(a);
+    drawTrackBase(); drawCar(car);
+    $("lap").textContent = Math.round(r.lapFraction*100)+"%";
+    $("speed").textContent = r.speed.toFixed(1);
+    $("steps").textContent = car.t;
+    if (r.done) {
+      done = true;
+      if (r.laps >= 1) { $("result").textContent = "clean lap"; $("result").className = "v win"; }
+      else if (r.crashed) { $("result").textContent = "crashed"; $("result").className = "v bad"; }
+      else { $("result").textContent = "time up"; }
+    }
+    await new Promise(res => setTimeout(res, 24));
+  }
+  running = false; $("run").disabled = false;
+}
+
+$("brainToggle").addEventListener("click", (e) => {
+  const b = e.target.dataset.brain; if (!b) return;
+  brain = b;
+  [...e.currentTarget.children].forEach(c => c.classList.toggle("on", c.dataset.brain === b));
+});
+$("run").addEventListener("click", drive);
+window.addEventListener("resize", () => { T = fit(); drawTrackBase(); });
+drawTrackBase();
+loadPolicy();
+</script>
+</body>
+</html>

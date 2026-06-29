@@ -1,0 +1,35 @@
+# PPO training config for Raceline. Loaded by raceline/train.py.
+# Tuned for a small sensor-vector observation and fast CPU training.
+
+seed: 0
+
+env:
+  n_rays: 7
+  max_range: 60.0
+  max_steps: 800
+  target_laps: 1
+  max_speed: 12.0
+  half_width: 9.0
+  w_progress: 1.0
+  w_time: 0.02
+  w_crash: 5.0
+
+ppo:
+  total_timesteps: 1000000
+  n_envs: 8               # parallel cars (SubprocVecEnv) - the real CPU speedup
+  n_steps: 512            # rollout per env; total batch = n_steps * n_envs = 4096
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  learning_rate: 0.0003
+  ent_coef: 0.01         # exploration: important early so the car tries turning
+  clip_range: 0.2
+  policy: MlpPolicy
+  net_arch: [64, 64]     # tiny net -> sub-MB ONNX, instant in-browser inference
+
+eval:
+  n_eval_episodes: 10
+  eval_freq: 20000
+
+output_dir: runs/ppo
