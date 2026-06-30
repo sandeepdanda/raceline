@@ -2,31 +2,43 @@
 
 **Watch a car teach itself to race.**
 
-A little 2D car starts out knowing nothing - it drives straight into the first wall.
-A few hundred practice laps later it's threading corners and stringing together clean,
-fast laps. Raceline is a reinforcement-learning agent that learns the *racing line* (the
-fast path through a track) from nothing but distance sensors and a reward for making
-progress, then drives live in your browser.
+A little 2D car starts out knowing nothing - it drives straight into the first wall. A few
+hundred practice laps later it's threading corners and stringing together clean, fast laps.
+Raceline is a reinforcement-learning agent that learns the *racing line* from nothing but
+distance sensors and a reward for making progress, then drives live in your browser.
 
-It is a full product, not a notebook:
+> The most satisfying kind of RL demo: you literally watch the thing get good. No dataset,
+> no labels, no cloud. The car learns purely by crashing, getting a little reward for
+> progress, and trying again.
 
-- a custom **Gymnasium** environment (`RaceTrackEnv`) - a top-down car with ray sensors on
-  a walled track,
-- a **PPO** policy trained with Stable-Baselines3, plus simple baselines to beat,
-- a seed-aware **evaluation harness** reporting laps completed, crash rate, and lap time
-  with confidence intervals (not one lucky run),
-- the trained policy exported to **ONNX** and served **fully in the browser** - a track you
-  watch the car drive in real time, a toggle between the untrained and trained brain, and
-  the sensor rays drawn live. Zero backend.
+## What it does
 
-Trained, it laps at **IQM 1.0, CI [1.0, 1.0], 0% crash** across 30 held-out seeds (a
-117-step lap); the random and follow-the-longest-ray baselines complete 0 laps and crash
-every time. Training runs on **8 parallel car simulators** (`SubprocVecEnv`) and finishes 1M
-steps in under 3 minutes on a laptop CPU - no GPU needed (see below).
+The car sees only a handful of distance sensors (rays to the nearest wall) plus its speed,
+and picks a steering + throttle action each tick. PPO rewards it for progress around the
+track and penalizes crashing. After ~1M steps of practice it laps cleanly, every time - then
+the trained brain is exported to ONNX and runs entirely in a browser canvas, with a toggle
+to flip between the untrained car (instant crashes) and the trained one (clean laps) on the
+same track, sensor rays drawn live.
 
-> Why this project: it's the most satisfying kind of RL demo - you literally watch the
-> thing get good. No dataset, no labels, no cloud. The car learns purely by crashing,
-> getting a little reward for progress, and trying again.
+Four layers, each usable on its own:
+
+- a custom **Gymnasium** env (`RaceTrackEnv`) - a top-down car with ray sensors on a walled track,
+- a **PPO** policy (Stable-Baselines3), trained across 8 parallel envs, plus baselines to beat,
+- a seed-aware **evaluation harness** - laps, crash rate, lap time with bootstrap CIs (not one lucky run),
+- a **zero-backend web demo** - the ONNX policy driving live via `onnxruntime-web`.
+
+## Results
+
+Trained policy vs baselines, 30 held-out seeds (`runs/ppo/eval.json`):
+
+| Driver | Laps (IQM) | 95% CI | Crash rate | Lap time |
+|---|---|---|---|---|
+| **Raceline (PPO)** | **1.0** | [1.0, 1.0] | **0%** | 117 steps |
+| Follow-longest-ray | 0.0 | [0.0, 0.0] | 100% | - |
+| Random | 0.0 | [0.0, 0.0] | 100% | - |
+
+The CIs separate cleanly, so the RL win is real - not a cherry-picked lap. Training finishes
+1M steps in under 3 minutes on a laptop CPU.
 
 ## The story in one screen
 
@@ -47,7 +59,7 @@ uv pip install -e .
 # 1. sanity-check the environment (random driver, no training)
 python -m raceline.envs.racetrack_env --selftest
 
-# 2. train the PPO driver (CPU, minutes)
+# 2. train the PPO driver (8 parallel envs, CPU, ~3 min)
 python -m raceline.train --config configs/ppo.yaml
 
 # 3. evaluate the trained car vs baselines, with confidence intervals
@@ -70,29 +82,14 @@ uv pip install -e ".[notebook]"
 jupyter lab notebooks/raceline.ipynb     # or: jupyter notebook
 ```
 
-**On GPUs:** this project is CPU-bound on purpose - training time is dominated by stepping
-the Python car simulator, and the policy net is tiny (`[64, 64]`), so a GPU does not help
-and usually hurts (transfer overhead beats the small matmul; SB3 recommends CPU for
-`MlpPolicy`). The real speedup is *parallel environments* (many cars at once), not a GPU.
-The notebook has a `DEVICE` toggle (`"cpu"` / `"mps"` / `"cuda"`) and prints wall-clock time
-so you can benchmark it yourself.
+## Why no GPU?
 
-## Repository layout
-
-```
-raceline/
-  envs/racetrack_env.py    # the custom Gymnasium env: car physics + ray sensors + track
-  envs/track.py            # track geometry (centerline, walls) + sensor ray-casting
-  agents/baselines.py      # random + simple "follow the longest ray" drivers to beat
-  train.py                 # SB3 PPO training entrypoint (yaml config)
-  eval.py                  # seed-aware evaluation: laps, crashes, lap time + bootstrap CIs
-  export_onnx.py           # PPO policy -> ONNX for in-browser inference
-configs/                   # training + eval configs
-web/                       # in-browser demo: canvas track, live car, onnxruntime-web
-research/                  # RL tooling stack + similar-projects x-factor analysis (cited)
-docs/report/               # before/after HTML report
-tests/                     # env contract + sensor + reward + baseline tests
-```
+This project is CPU-bound on purpose. Training time is dominated by stepping the Python car
+simulator, and the policy net is tiny (`[64, 64]`), so a GPU does not help and usually hurts
+(transfer overhead beats the small matmul; SB3 recommends CPU for `MlpPolicy`). The real
+speedup is **parallel environments** (many cars at once): 100k steps go from 36.9s on 1 env
+to 16.1s on 8, a 2.3x win on a 12-core laptop. The notebook has a `DEVICE` toggle
+(`"cpu"` / `"mps"` / `"cuda"`) so you can benchmark it yourself.
 
 ## Documents
 
